@@ -41,4 +41,4 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"Graph Execution Failed: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run(server, host="0.0.0.0", port=8000)
+    uvicorn.run(server, host="0.0.0.0", port=8001)

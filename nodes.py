@@ -76,6 +76,7 @@ def rag_generator_node(state: GraphState):
         context_text = "NO CONTEXT AVAILABLE"
     else:
         context_text = "\n\n".join(context_chunks)
+       
 
     system_prompt = """
     You are the Elon Musk Digital Twin.
@@ -102,7 +103,8 @@ def rag_generator_node(state: GraphState):
     logger.info("Response generated successfully.")
 
     return {
-        "final_response": response
+        "final_response": response,
+        "response_type":"rag"
     }
 
 class GradeSchema(BaseModel):
@@ -203,7 +205,7 @@ def web_search_node(state: GraphState):
         logger.info("Executing Tavily API search...")
         raw_results = search_tool.invoke({"query": optimized_query})
 
-        logger.info(f"RAW TAVILY RESPONSE: {raw_results}")
+        logger.info(f"RAW TAVILY RESPONSE: {raw_results} and {type(raw_results)}")
         
         if isinstance(raw_results, list):
             results = raw_results
@@ -232,24 +234,60 @@ def web_search_node(state: GraphState):
                 "source_collection": "web_search",
                 "score": 1.0
             })
+        print(f"web_docs---->{web_docs}")
+        system_prompt = f"""
+        You are the Elon Musk Digital Twin.
 
-        logger.info(f"Web search complete. Parsed {len(web_docs)} valid documents.")
-        if len(web_docs) == 0:
-            logger.warning("⚠️ No web results found. Injecting synthetic fallback context.")
+        You are currently operating in WEB SEARCH MODE.
+        Local RAG retrieval failed quality threshold (0.70), so you must rely ONLY on verified web search results.
 
-            web_docs.append({
-                "content": (
-                    "Elon Musk's 5-step engineering algorithm: "
-                    "1) Make requirements less dumb, "
-                    "2) Delete unnecessary parts, "
-                    "3) Simplify or optimize, "
-                    "4) Accelerate cycle time, "
-                    "5) Automate."
-                ),
-                "url": "synthetic://elon_5_step_algorithm",
-                "source_collection": "fallback",
-                "score": 0.5
-            })
+        STRICT RULES:
+        1. Use ONLY the provided web search context.
+        2. Do NOT hallucinate or add external knowledge.
+        3. If context is insufficient, say so clearly.
+        4. Apply first-principles reasoning.
+        5. Think in systems, incentives, physics, engineering, and scale.
+        6. Be concise, direct, high-signal.
+        7. Avoid fluff, motivational tone, or generic AI phrasing.
+
+        PERSONA:
+        - Speak like Elon Musk.
+        - Analytical.
+        - Slightly blunt.
+        - Focused on engineering, economics, and execution.
+        - Forward-looking.
+        - Occasionally visionary, but grounded in logic.
+
+        WEB SEARCH RESULTS:
+        {web_docs}
+
+        RESPONSE STRUCTURE:
+        - Direct answer first.
+        - Then brief reasoning.
+        - If applicable, mention tradeoffs.
+        - If data conflict exists, acknowledge uncertainty.
+        """
+
+        focus_prompt = f"""
+        USER QUESTION:
+        {state['query']}
+
+        Answer using ONLY the provided web search results.
+        """
+
+        web_response = llm.get_response(
+        system_instruction=system_prompt,
+        user_query=focus_prompt,
+        temperature=0.2
+        )
+
+        return {
+        "final_response": web_response,
+        "needs_assistance": False,
+        "revision_count": state.get("revision_count", 0) + 1,
+        "web_results": web_docs
+        }
+
 
     except Exception as e:
         logger.error(f"Web search failed: {str(e)}")

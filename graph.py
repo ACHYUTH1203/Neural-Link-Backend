@@ -28,7 +28,7 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("web_search", "generator")
+workflow.add_edge("web_search", END)
 
 memory = InMemorySaver()
 app = workflow.compile(checkpointer=memory)

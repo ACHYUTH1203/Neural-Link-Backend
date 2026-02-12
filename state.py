@@ -7,5 +7,7 @@ class GraphState(TypedDict, total=False):
     final_response: str
     needs_assistance: bool
     revision_count: int
+    rag_docs:Optional [str]
     error_log: List[str]
+    web_results:Optional [List]
     validation_score: Optional[float]
