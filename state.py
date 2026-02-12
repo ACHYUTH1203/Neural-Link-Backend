@@ -1,12 +1,11 @@
-from typing import List, Optional, TypedDict
-class GraphState(TypedDict):
+
+from typing import TypedDict, Annotated, List, Dict, Optional
+import operator
+
+class GraphState(TypedDict, total=False):
     query: str
-    intent: str  
-    collections: List[str]
-    documents: List[dict]
-    first_principles_analysis: Optional[str]
-    final_response: Optional[str]
-    rag_answer: Optional[str] 
+    final_response: str
     needs_assistance: bool
-    error_log: List[str]
     revision_count: int
+    error_log: List[str]
+    validation_score: Optional[float]

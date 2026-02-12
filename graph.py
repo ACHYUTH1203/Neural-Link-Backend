@@ -35,7 +35,17 @@ app = workflow.compile(checkpointer=memory)
 
 if __name__ == "__main__":
     config = {"configurable": {"thread_id": "musk_fan_1"}}
-    initial_input = {"query": "How do you apply the 5-step algorithm to Starship production?"}
     
-    for event in app.stream(initial_input, config):
-        print(event)
+    # Fill all keys defined in GraphState to avoid KeyErrors in nodes
+    initial_input = {
+        "query": "How do you apply the 5-step algorithm to Starship production?",
+        "documents": [], # Initialize as empty so rag_generator_node doesn't crash
+        "revision_count": 0,
+        "error_log": [],
+        "needs_assistance": False
+    }
+    
+    # Use app.invoke for a single result, or keep app.stream to see the node transitions
+    final_state = app.invoke(initial_input, config)
+    print("\n--- FINAL RESPONSE ---")
+    print(final_state.get("final_response"))
