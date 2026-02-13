@@ -1,5 +1,7 @@
+import datetime
 import os
 import logging
+import uuid
 import numpy as np
 from dotenv import load_dotenv
 from llm import ElonLLM
@@ -8,6 +10,8 @@ from pydantic import BaseModel, Field
 from langchain_community.tools.tavily_search import TavilySearchResults
 from sentence_transformers import SentenceTransformer
 from pymongo import MongoClient
+from datetime import datetime
+
 
 mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
 mongo_db = mongo_client["Elon"]
@@ -29,6 +33,69 @@ books_col = mongo_db["books"]
 frameworks_col = mongo_db["frameworks"]
 podcasts_col = mongo_db["podcasts"]
 threads_col = mongo_db["threads"]
+user_interactions_col = mongo_db["user_interaction"]
+
+def query_refiner_node(state: GraphState):
+    logger.info("--- REFINING QUERY BASED ON HISTORY ---")
+    llm = ElonLLM()
+
+    history_cursor = user_interactions_col.find(
+        {"user_id": state["user_id"]}
+    ).sort("timestamp", -1).limit(5)
+
+    history = []
+    for h in history_cursor:
+        h["_id"] = str(h["_id"]) 
+        history.append(h)
+    
+    history = history[::-1]
+
+    if not history:
+        return {"query": state["query"], "chat_history": []}
+
+    formatted_history = ""
+    for h in history:
+
+        formatted_history += f"User: {h['user_query']}\nElon: {h['response']}\n---\n"
+
+    refinement_prompt = f"""
+    You are a Query Refiner. Your job is to look at the 'Current Query' and the 'Chat History'.
+    If the 'Current Query' refers to something in the history (e.g., uses 'it', 'him', 'that project'), 
+    rewrite it into a standalone query that captures the full context.
+    If it is a new, independent topic, return the 'Current Query' exactly as is.
+
+    CHAT HISTORY:
+    {formatted_history}
+
+    CURRENT QUERY:
+    {state['query']}
+
+    Return ONLY the refined query text.
+    """
+
+    refined_query = llm.get_response(
+        system_instruction="You are a linguistic context expert.",
+        user_query=refinement_prompt,
+        temperature=0
+    ).strip()
+
+    logger.info(f"Original: {state['query']} -> Refined: {refined_query}")
+    
+    return {
+        "query": refined_query, 
+        "original_query": state["query"], 
+        "chat_history": history
+    }
+
+def save_interaction_node(state: GraphState):
+    """Saves the turn to MongoDB so the Refiner can find it later."""
+    user_interactions_col.insert_one({
+        "user_id": state["user_id"],
+        "user_query": state["original_query"],
+        "response": state["final_response"],
+        "timestamp": datetime.utcnow() 
+    })
+    return state
 
 def rag_generator_node(state: GraphState):
     logger.info("--- ENTERING RAG GENERATOR NODE ---")
