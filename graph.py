@@ -16,19 +16,25 @@ workflow.add_node("generator", rag_generator_node)
 workflow.add_node("validator", validator_node)
 workflow.add_node("web_search", web_search_node)
 
+# Step 1: Always generate first
 workflow.add_edge(START, "generator")
+
+# Step 2: Always validate the RAG output
 workflow.add_edge("generator", "validator")
 
+# Step 3: Conditional Routing
 workflow.add_conditional_edges(
     "validator",
     route_after_validation,
     {
-        "web_search": "web_search",
-        END: END
+        "web_search": "web_search", # If score < 0.7
+        END: END                    # If score >= 0.7
     }
 )
 
-workflow.add_edge("web_search", END)
+# Step 4: Web search is the FINAL step
+workflow.add_edge("web_search", END) 
+
 
 memory = InMemorySaver()
 app = workflow.compile(checkpointer=memory)

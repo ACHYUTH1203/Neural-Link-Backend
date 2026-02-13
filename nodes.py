@@ -107,45 +107,43 @@ def rag_generator_node(state: GraphState):
         "response_type":"rag"
     }
 
-class GradeSchema(BaseModel):
-    score: float = Field(description="Score between 0 and 1.0 based on factual accuracy and relevance.")
-    is_supported: bool = Field(description="Is the answer supported by the documents?")
-    feedback: str = Field(description="Reasoning for the assigned score.")
-
 def validator_node(state: GraphState):
-    """Validates the RAG answer. If score < 0.7, triggers web search fallback."""
+    """Simplified validator: Returns only a score to decide on web search fallback."""
     logger.info("--- ENTERING VALIDATOR NODE ---")
     llm = ElonLLM()
-    structured_llm = llm.llm.with_structured_output(GradeSchema)
     
     validation_prompt = f"""
-    Compare the following Answer against the provided Context for the Query.
+    Evaluate this response for the Elon Musk Digital Twin.
     
     QUERY: {state['query']}
+    CONTEXT: {state.get('rag_docs', 'NO CONTEXT AVAILABLE')}
     ANSWER: {state['final_response']}
-    
+
     CRITERIA:
-    - Give a score of 1.0 if the answer is perfectly supported by the context.
-    - Give a score below 0.7 if the answer is generic, hallucinated, or 'I don't know'.
+    1. Accuracy: Is it supported by context?
+    2. Persona: Does it sound like Elon (blunt, first-principles, no fluff)?
+
+    Output ONLY a single number between 0.0 and 1.0. 
+    A score < 0.7 means we must discard this and use Web Search.
     """
     
-    logger.info("Invoking LLM Judge for validation...")
-    grade = structured_llm.invoke(validation_prompt)
+    # Get numeric response from LLM
+    raw_score = llm.get_response(
+        system_instruction="Output numbers only.", 
+        user_query=validation_prompt,
+        temperature=0
+    )
     
-    low_score = grade.score < 0.70
-    logger.info(f"Validation Result -> Score: {grade.score} | Supported: {grade.is_supported}")
-    logger.info(f"Feedback: {grade.feedback}")
+    try:
+        score = float(raw_score.strip())
+    except:
+        score = 0.0 # Fallback to web search on error
 
-    if low_score:
-        logger.warning(f"Quality threshold not met ({grade.score} < 0.7). Marking for assistance.")
-    else:
-        logger.info("Quality threshold met. Proceeding to final delivery.")
+    low_score = score < 0.70
     
     return {
-        "rag_answer": state['final_response'] if low_score else None,
-        "needs_assistance": low_score,
-        "error_log": state.get("error_log", []) + [f"Grade: {grade.score} - {grade.feedback}"],
-        "validation_score": grade.score
+        "validation_score": score,
+        "needs_assistance": low_score
     }
 
 def web_search_node(state: GraphState):
@@ -159,8 +157,10 @@ def web_search_node(state: GraphState):
         return {
             "documents": state.get("documents", []),
             "revision_count": state.get("revision_count", 0) + 1,
-            "needs_assistance": False
+            "needs_assistance": False,
+            "error_log": state.get("error_log", []) + ["Web search skipped: Missing API Key"]
         }
+
     search_tool = TavilySearchResults(
         k=5,
         tavily_api_key=tavily_api_key,
@@ -170,131 +170,76 @@ def web_search_node(state: GraphState):
 
     llm = ElonLLM()
 
-    last_error = (
-        state.get("error_log", [])[-1]
-        if state.get("error_log")
-        else "No previous error log found."
-    )
-
-
+    # Optimized search query generation
     search_query_gen_prompt = f"""
-    Generate a highly specific Google search query to answer the user's question.
+    Generate a highly specific search query to answer the user's question.
     User question: {state['query']}
-    Return ONLY the search query.
+    Return ONLY the search query text.
     """
 
     logger.info("Generating optimized search query...")
-
     optimized_query = llm.get_response(
-            system_instruction="You are a world-class search optimization expert.",
-            user_query=search_query_gen_prompt,
-            temperature=0.0
-        ).strip()
-
-    logger.info(f"Optimized Query Generated: '{optimized_query}'")
-
-    if len(optimized_query.split()) < 3:
-        logger.warning("Query too short. Using fallback query.")
-        optimized_query = f"Elon Musk 5 step algorithm Starship production SpaceX engineering"
+        system_instruction="You are a world-class search optimization expert.",
+        user_query=search_query_gen_prompt,
+        temperature=0.0
+    ).strip().replace('"', '') # Clean quotes
 
     logger.info(f"Final Search Query Used: '{optimized_query}'")
 
     web_docs = []
-
     try:
         logger.info("Executing Tavily API search...")
         raw_results = search_tool.invoke({"query": optimized_query})
-
-        logger.info(f"RAW TAVILY RESPONSE: {raw_results} and {type(raw_results)}")
         
-        if isinstance(raw_results, list):
-            results = raw_results
-        elif isinstance(raw_results, dict):
-            results = raw_results.get("results", [])
-        else:
-            results = []
-
-
-        logger.info(f"Tavily raw results count: {len(results)}")
-
+        results = raw_results if isinstance(raw_results, list) else raw_results.get("results", [])
+        
         seen_urls = set()
-
         for result in results:
             content = result.get("content") or result.get("snippet") or ""
             url = result.get("url", "")
+            if content and url not in seen_urls:
+                seen_urls.add(url)
+                web_docs.append({"content": content.strip(), "url": url})
 
-            if not content or not url or url in seen_urls:
-                continue
-
-            seen_urls.add(url)
-
-            web_docs.append({
-                "content": content.strip(),
-                "url": url,
-                "source_collection": "web_search",
-                "score": 1.0
-            })
-        print(f"web_docs---->{web_docs}")
+        # --- REFINED ELON PERSONA PROMPT ---
         system_prompt = f"""
-        You are the Elon Musk Digital Twin.
+        You are the Elon Musk Digital Twin. You are high-signal, physics-first, and extremely direct.
 
-        You are currently operating in WEB SEARCH MODE.
-        Local RAG retrieval failed quality threshold (0.70), so you must rely ONLY on verified web search results.
+        STRICT OPERATIONAL DIRECTIVES:
+        1. NO AI PREAMBLE: Never start with "Based on the search results" or "According to." Start with the answer.
+        2. NO FLUFF: Delete words like "prominent," "growing importance," or "expected to boom." Use data and facts.
+        3. PHYSICS-FIRST: If the query is technical, frame the answer in terms of energy, materials, or engineering constraints.
+        4. PERSONA: You are blunt. If a trend is hype, call it out. Use short sentences. 
+        5. LINGUISTIC STYLE: Use terms like "high signal," "first principles," "vector," or "orders of magnitude" only if they fit the logic.
 
-        STRICT RULES:
-        1. Use ONLY the provided web search context.
-        2. Do NOT hallucinate or add external knowledge.
-        3. If context is insufficient, say so clearly.
-        4. Apply first-principles reasoning.
-        5. Think in systems, incentives, physics, engineering, and scale.
-        6. Be concise, direct, high-signal.
-        7. Avoid fluff, motivational tone, or generic AI phrasing.
-
-        PERSONA:
-        - Speak like Elon Musk.
-        - Analytical.
-        - Slightly blunt.
-        - Focused on engineering, economics, and execution.
-        - Forward-looking.
-        - Occasionally visionary, but grounded in logic.
-
-        WEB SEARCH RESULTS:
+        WEB SEARCH CONTEXT:
         {web_docs}
-
-        RESPONSE STRUCTURE:
-        - Direct answer first.
-        - Then brief reasoning.
-        - If applicable, mention tradeoffs.
-        - If data conflict exists, acknowledge uncertainty.
         """
 
         focus_prompt = f"""
-        USER QUESTION:
-        {state['query']}
+        USER QUESTION: {state['query']}
 
-        Answer using ONLY the provided web search results.
+        Provide the final answer now. Zero fluff. Just high-signal engineering and business logic.
         """
 
         web_response = llm.get_response(
-        system_instruction=system_prompt,
-        user_query=focus_prompt,
-        temperature=0.2
+            system_instruction=system_prompt,
+            user_query=focus_prompt,
+            temperature=0.3 # Slightly higher for more natural "Elon" phrasing
         )
 
         return {
-        "final_response": web_response,
-        "needs_assistance": False,
-        "revision_count": state.get("revision_count", 0) + 1,
-        "web_results": web_docs
+            "final_response": web_response,
+            "needs_assistance": False,
+            "revision_count": state.get("revision_count", 0) + 1,
+            "web_results": web_docs,
+            "error_log": state.get("error_log", []) + ["Web search fallback executed successfully"]
         }
-
 
     except Exception as e:
         logger.error(f"Web search failed: {str(e)}")
-        web_docs = []
-
-    return {
-        "documents": state.get("documents", []) + web_docs,
-        "revision_count": state.get("revision_count", 0) + 1,
-        "needs_assistance": False
-    }
+        return {
+            "needs_assistance": False,
+            "revision_count": state.get("revision_count", 0) + 1,
+            "error_log": state.get("error_log", []) + [f"Web search error: {str(e)}"]
+        }
