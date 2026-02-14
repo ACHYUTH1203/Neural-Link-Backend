@@ -62,6 +62,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from state import GraphState
 from nodes import (
     query_refiner_node, 
+    conversation_strategy_node,
     rag_generator_node, 
     validator_node, 
     web_search_node, 
@@ -79,11 +80,15 @@ def route_after_validation(state: GraphState):
     
     # If valid or revision limit reached, save to DB
     return "save_memory"
-
+def route_after_strategy(state: GraphState):
+    if state.get("conversation_mode") == "clarify":
+        return "save_memory"
+    return "refiner"
 # Initialize Graph
 workflow = StateGraph(GraphState)
 
 # Define Nodes
+workflow.add_node("conversation_strategy", conversation_strategy_node)
 workflow.add_node("refiner", query_refiner_node)       # New: Resolves context
 workflow.add_node("generator", rag_generator_node)
 workflow.add_node("validator", validator_node)
@@ -92,16 +97,20 @@ workflow.add_node("save_memory", save_interaction_node) # New: Persists to Mongo
 
 # --- Graph Logic ---
 
-# 1. Start with Query Refinement
-workflow.add_edge(START, "refiner")
+workflow.add_edge(START, "conversation_strategy")
 
-# 2. Pass the refined query to the RAG Generator
+workflow.add_conditional_edges(
+    "conversation_strategy",
+    route_after_strategy,
+    {
+        "refiner": "refiner",
+        "save_memory": "save_memory"
+    }
+)
+
 workflow.add_edge("refiner", "generator")
-
-# 3. Validate the output
 workflow.add_edge("generator", "validator")
 
-# 4. Decide: Web Search vs. Save & Finish
 workflow.add_conditional_edges(
     "validator",
     route_after_validation,
@@ -111,16 +120,11 @@ workflow.add_conditional_edges(
     }
 )
 
-# 5. After Web Search, go to Save Memory
 workflow.add_edge("web_search", "save_memory")
-
-# 6. Final step is always saving the interaction
 workflow.add_edge("save_memory", END)
 
-# Compile with persistence
 memory = InMemorySaver()
 app = workflow.compile(checkpointer=memory)
-
 if __name__ == "__main__":
     import uuid
     # Mocking a user session
