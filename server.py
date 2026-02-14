@@ -29,7 +29,7 @@ server = FastAPI(title="Elon Musk Digital Twin API")
 
 server.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  #frontend domain 
+    allow_origins=["https://neurallink-two.vercel.app"],  #frontend domain 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
