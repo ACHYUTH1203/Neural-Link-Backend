@@ -9,15 +9,17 @@ from llm import ElonLLM
 from state import GraphState
 from pydantic import BaseModel, Field
 from langchain_community.tools.tavily_search import TavilySearchResults
-from sentence_transformers import SentenceTransformer
 from pymongo import MongoClient
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+from langchain_openai import OpenAIEmbeddings
+
 
 
 mongo_client = MongoClient(os.getenv("MONGO_URI"))
 mongo_db = mongo_client["Elon"]
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+
 
 MAX_CONTEXT_CHARS = 6000  
 
@@ -348,7 +350,7 @@ def rag_generator_node(state: GraphState):
             "response_type": "expansion"
         }
 
-    query_embedding = embedding_model.encode(query).tolist()
+    query_embedding = embedding_model.embed_query(query)
 
     logger.info("Performing vector similarity search...")
 
