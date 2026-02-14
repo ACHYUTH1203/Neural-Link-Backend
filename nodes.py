@@ -18,7 +18,7 @@ from langchain_openai import OpenAIEmbeddings
 
 mongo_client = MongoClient(os.getenv("MONGO_URI"))
 mongo_db = mongo_client["Elon"]
-embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-small",api_key=os.getenv("OPENAI_API_KEY"))
 
 
 MAX_CONTEXT_CHARS = 6000  
