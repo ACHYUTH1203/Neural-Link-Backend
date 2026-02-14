@@ -78,9 +78,7 @@ def conversation_strategy_node(state: GraphState):
     user_query = state["query"].strip()
     user_query_clean = user_query.lower()
 
-    # ---------------------------------------------------
-    # 1️⃣ CONTINUATION DETECTION (yes, expand, etc.)
-    # ---------------------------------------------------
+
     continuation_signals = [
         "yes", "yeah", "yep", "ok", "okay",
         "sure", "continue", "go ahead",
@@ -96,9 +94,6 @@ def conversation_strategy_node(state: GraphState):
             "clarification_count": 999
         }
 
-    # ---------------------------------------------------
-    # 2️⃣ HANDLE RESPONSE TO CLARIFICATION
-    # ---------------------------------------------------
     if state.get("awaiting_clarification"):
 
         interpretation_prompt = f"""
@@ -125,7 +120,6 @@ def conversation_strategy_node(state: GraphState):
 
         logger.info(f"Clarification interpretation: {interpretation}")
 
-        # 🔹 BROAD → Answer fully
         if interpretation == "BROAD":
             merged_query = f"{state.get('original_query')} (provide a broad overview)"
             return {
@@ -136,7 +130,6 @@ def conversation_strategy_node(state: GraphState):
                 "clarification_count": 999
             }
 
-        # 🔹 SPECIFIC → Merge and answer
         if interpretation == "SPECIFIC":
             merged_query = f"{state.get('original_query')} regarding {user_query}"
             return {
@@ -147,7 +140,6 @@ def conversation_strategy_node(state: GraphState):
                 "clarification_count": 999
             }
 
-        # 🔹 UNCLEAR → Only clarify if limit not reached
         if state.get("clarification_count", 0) >= 1:
             logger.info("Clarification already used. Forcing answer.")
             return {
@@ -177,9 +169,6 @@ def conversation_strategy_node(state: GraphState):
             "clarification_count": state.get("clarification_count", 0) + 1
         }
 
-    # ---------------------------------------------------
-    # 3️⃣ NORMAL INTENT CLASSIFICATION
-    # ---------------------------------------------------
     intent_prompt = f"""
     Decide whether this query requires clarification.
 
@@ -200,9 +189,6 @@ def conversation_strategy_node(state: GraphState):
 
     logger.info(f"Intent decision: {decision}")
 
-    # ---------------------------------------------------
-    # 4️⃣ CLARIFY (ONLY ONCE)
-    # ---------------------------------------------------
     if decision == "CLARIFY":
 
         if state.get("clarification_count", 0) >= 1:
@@ -235,9 +221,7 @@ def conversation_strategy_node(state: GraphState):
             "clarification_count": state.get("clarification_count", 0) + 1
         }
 
-    # ---------------------------------------------------
-    # 5️⃣ DEFAULT → ANSWER
-    # ---------------------------------------------------
+
     return {
         "conversation_mode": "answer",
         "awaiting_clarification": False
@@ -316,9 +300,6 @@ def rag_generator_node(state: GraphState):
     llm = ElonLLM()
     query = state["query"]
 
-    # ====================================================
-    # 1️⃣ HANDLE FORCE EXPANSION (User said yes/more/etc.)
-    # ====================================================
     if state.get("force_expand"):
         logger.info("Expanding previous topic.")
 
@@ -367,9 +348,6 @@ def rag_generator_node(state: GraphState):
             "response_type": "expansion"
         }
 
-    # ====================================================
-    # 2️⃣ NORMAL RAG FLOW
-    # ====================================================
     query_embedding = embedding_model.encode(query).tolist()
 
     logger.info("Performing vector similarity search...")
@@ -481,8 +459,7 @@ def validator_node(state: GraphState):
     Output ONLY a single number between 0.0 and 1.0. 
     A score < 0.7 means we must discard this and use Web Search.
     """
-    
-    # Get numeric response from LLM
+
     raw_score = llm.get_response(
         system_instruction="Output numbers only.", 
         user_query=validation_prompt,
@@ -492,8 +469,7 @@ def validator_node(state: GraphState):
     try:
         score = float(raw_score.strip())
     except:
-        score = 0.0 # Fallback to web search on error
-
+        score = 0.0 
     low_score = score < 0.70
     
     return {
@@ -501,130 +477,6 @@ def validator_node(state: GraphState):
         "needs_assistance": low_score
     }
 
-# def web_search_node(state: GraphState):
-#     """
-#     Fallback node: Executes a targeted web search if local MongoDB 
-#     data failed the 0.70 quality threshold.
-#     """
-    
-
-#     logger.info("--- ENTERING WEB SEARCH NODE ---")
-#     if not tavily_api_key:
-#         logger.error(" TAVILY_API_KEY is missing. Skipping web search.")
-#         return {
-#             "documents": state.get("documents", []),
-#             "revision_count": state.get("revision_count", 0) + 1,
-#             "needs_assistance": False,
-#             "error_log": state.get("error_log", []) + ["Web search skipped: Missing API Key"]
-#         }
-
-#     search_tool = TavilySearchResults(
-#         k=5,
-#         tavily_api_key=tavily_api_key,
-#         include_answer=False,
-#         include_raw_content=False
-#     )
-
-#     llm = ElonLLM()
-
-#     # Optimized search query generation
-#     search_query_gen_prompt = f"""
-#     Generate a highly specific search query to answer the user's question.
-#     User question: {state['query']}
-#     Return ONLY the search query text.
-#     """
-
-#     logger.info("Generating optimized search query...")
-#     optimized_query = llm.get_response(
-#         system_instruction="You are a world-class search optimization expert.",
-#         user_query=search_query_gen_prompt,
-#         temperature=0.0
-#     ).strip().replace('"', '') # Clean quotes
-
-#     logger.info(f"Final Search Query Used: '{optimized_query}'")
-
-#     web_docs = []
-#     try:
-#         logger.info("Executing Tavily API search...")
-#         raw_results = search_tool.invoke({"query": optimized_query})
-        
-#         results = raw_results if isinstance(raw_results, list) else raw_results.get("results", [])
-        
-#         seen_urls = set()
-#         for result in results:
-#             content = result.get("content") or result.get("snippet") or ""
-#             url = result.get("url", "")
-#             if content and url not in seen_urls:
-#                 seen_urls.add(url)
-#                 web_docs.append({"content": content.strip(), "url": url})
-
-#         # --- REFINED ELON PERSONA PROMPT ---
-#         system_prompt = f"""
-#         You are the Elon Musk Digital Twin. You are high-signal, physics-first, and extremely direct.
-#         You are Elon Musk.
-
-#         You are speaking in FIRST PERSON.
-#         Never refer to Elon Musk in third person.
-#         Never say "Elon Musk".
-#         Never say "he" or "him".
-#         Always speak as "I".
-
-#         STRICT RESPONSE STRUCTURE:
-#         1. First, answer the user clearly and directly.
-#         2. Then, on a new paragraph, add ONE short conversational follow-up invitation.
-#         3. The follow-up must NOT introduce a new technical question.
-#         4. The follow-up must be general and inviting.
-#         5. Use phrasing like:
-#         - "Would you like to explore this further?"
-#         - "Do you want to dive deeper into this?"
-#         - "Want to know more about it?"
-#         - "Should we go deeper?"
-
-#         6. Do NOT interrogate the user.
-#         7. Do NOT ask multi-layer technical questions.
-#         8. Keep the follow-up to one short sentence.
-
-#         STRICT OPERATIONAL DIRECTIVES:
-#         1. NO AI PREAMBLE: Never start with "Based on the search results" or "According to." Start with the answer.
-#         2. NO FLUFF: Delete words like "prominent," "growing importance," or "expected to boom." Use data and facts.
-#         3. PHYSICS-FIRST: If the query is technical, frame the answer in terms of energy, materials, or engineering constraints.
-#         4. PERSONA: You are blunt but natural. Avoid sounding robotic.
-
-#         WEB SEARCH CONTEXT:
-#         {web_docs}
-#         """
-   
-
-
-
-
-#         focus_prompt = f"""
-#         USER QUESTION: {state['query']}
-
-#         Provide the final answer now. Zero fluff. Just high-signal engineering and business logic.
-#         """
-
-#         web_response = llm.get_response(
-#             system_instruction=system_prompt,
-#             user_query=focus_prompt,
-#             temperature=0.3 
-#         )
-
-#         return {
-#             "final_response": web_response,
-#             "needs_assistance": False,
-#             "revision_count": state.get("revision_count", 0) + 1,
-#             "web_results": web_docs,
-#             "error_log": state.get("error_log", []) + ["Web search fallback executed successfully"]
-#         }
-
-#     except Exception as e:
-#         logger.error(f"Web search failed: {str(e)}")
-#         return {
-#             "needs_assistance": False,
-#             "revision_count": state.get("revision_count", 0) + 1,
-#             "error_log": state.get("error_log", []) + [f"Web search error: {str(e)}"]
-#         }
 def web_search_node(state: GraphState):
     """
     Fallback node: Executes a targeted web search if local MongoDB 
@@ -636,9 +488,7 @@ def web_search_node(state: GraphState):
     llm = ElonLLM()
     tavily_pool = TavilyKeyPool()
 
-    # ---------------------------------------------------
-    # 🔁 RETRY + KEY ROTATION WRAPPER
-    # ---------------------------------------------------
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=8),
@@ -658,9 +508,7 @@ def web_search_node(state: GraphState):
         logger.info("Executing Tavily API search...")
         return search_tool.invoke({"query": query})
 
-    # ---------------------------------------------------
-    # 🔎 Generate Optimized Search Query
-    # ---------------------------------------------------
+
     search_query_gen_prompt = f"""
     Generate a highly specific search query to answer the user's question.
     User question: {state['query']}
@@ -697,9 +545,7 @@ def web_search_node(state: GraphState):
                     "url": url
                 })
 
-        # ---------------------------------------------------
-        # 🎭 ELON PERSONA PROMPT (UNCHANGED LOGIC)
-        # ---------------------------------------------------
+
         system_prompt = f"""
         You are the Elon Musk Digital Twin. You are high-signal, physics-first, and extremely direct.
         You are Elon Musk.

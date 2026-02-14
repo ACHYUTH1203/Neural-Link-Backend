@@ -1,6 +1,7 @@
 
 import uvicorn
 import uuid
+import datetime
 import os
 import random
 from datetime import datetime
@@ -9,33 +10,31 @@ from pydantic import BaseModel
 from pymongo import MongoClient
 from graph import app  # LangGraph compiled app
 
+from fastapi.middleware.cors import CORSMiddleware
 
-# =====================================================
-# DATABASE SETUP
-# =====================================================
-mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"))
+
+mongo_client = MongoClient(os.getenv("MONGO_URI"))
 mongo_db = mongo_client["Elon"]
 
 usage_col = mongo_db["usage_tracking"]
 waitlist_col = mongo_db["waitlist_emails"]
 
 
-# =====================================================
-# LIMIT CONFIG
-# =====================================================
 FREE_CHAT_LIMIT = 5
 FREE_TOKEN_LIMIT = 8000
 
 
-# =====================================================
-# FASTAPI INSTANCE
-# =====================================================
 server = FastAPI(title="Elon Musk Digital Twin API")
 
 
-# =====================================================
-# MODELS
-# =====================================================
+server.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace with frontend domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class ChatRequest(BaseModel):
     query: str
 
@@ -44,9 +43,8 @@ class EmailRequest(BaseModel):
     email: str
 
 
-# =====================================================
-# USAGE HELPER
-# =====================================================
+
+
 def get_or_create_usage(user_id: str):
     usage = usage_col.find_one({"user_id": user_id})
 
@@ -63,10 +61,6 @@ def get_or_create_usage(user_id: str):
 
     return usage
 
-
-# =====================================================
-# INIT ENDPOINT
-# =====================================================
 @server.get("/init")
 async def init_chat(request: Request, response: Response):
 
@@ -81,31 +75,24 @@ async def init_chat(request: Request, response: Response):
             max_age=60 * 60 * 24 * 30
         )
 
-    greetings = [
-        "Welcome. What would you like to explore today?",
-        "Good to see you. What’s on your mind?",
-        "Let’s think in first principles. What topic shall we break down?"
-    ]
-
     usage = get_or_create_usage(active_user_id)
 
     remaining = max(0, FREE_CHAT_LIMIT - usage["chat_count"])
 
+    intro_message = "Hey, I'm Elon’s digital twin. What do you want to explore?"
+
+
+
     return {
-        "response": random.choice(greetings),
+        "response": intro_message.strip(),
         "remaining_questions": remaining
     }
 
 
-# =====================================================
-# CHAT ENDPOINT
-# =====================================================
 @server.post("/chat")
 async def chat_endpoint(request: Request, chat_request: ChatRequest, response: Response):
 
-    # -----------------------------
-    # IDENTIFY USER
-    # -----------------------------
+
     active_user_id = request.cookies.get("user_id")
 
     if not active_user_id:
@@ -119,9 +106,6 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest, response: R
 
     usage = get_or_create_usage(active_user_id)
 
-    # -----------------------------
-    # LIMIT CHECK
-    # -----------------------------
     if not usage.get("is_unlocked", False):
 
         if usage["chat_count"] >= FREE_CHAT_LIMIT:
@@ -136,9 +120,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest, response: R
                 "message": "Token limit reached. Enter your email to unlock full access."
             }
 
-    # -----------------------------
-    # RUN GRAPH
-    # -----------------------------
+
     config = {"configurable": {"thread_id": active_user_id}}
 
     initial_state = {
@@ -158,10 +140,9 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest, response: R
 
         response_text = result.get("final_response", "")
 
-        # Rough token estimation
+
         estimated_tokens = len(chat_request.query.split()) + len(response_text.split())
 
-        # Update usage
         usage_col.update_one(
             {"user_id": active_user_id},
             {
@@ -184,11 +165,36 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest, response: R
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail="Graph Execution Failed")
+    
+@server.post("/join-waitlist")
+async def join_waitlist(request: Request, email_request: EmailRequest):
+
+    active_user_id = request.cookies.get("user_id")
+
+    if not active_user_id:
+        raise HTTPException(status_code=400, detail="User session missing")
+
+    # Prevent duplicate emails
+    existing = waitlist_col.find_one({"email": email_request.email})
+
+    if existing:
+        return {
+            "success": True,
+            "message": "You're already on the waitlist."
+        }
+
+    waitlist_col.insert_one({
+        "user_id": active_user_id,
+        "email": email_request.email,
+        "created_at": datetime.utcnow()
+    })
+
+    return {
+        "success": True,
+        "message": "You're on the waitlist. We'll keep you posted."
+    }
 
 
-# =====================================================
-# EMAIL UNLOCK ENDPOINT
-# =====================================================
 @server.post("/unlock")
 async def unlock_access(request: Request, email_request: EmailRequest):
 
@@ -197,7 +203,6 @@ async def unlock_access(request: Request, email_request: EmailRequest):
     if not active_user_id:
         raise HTTPException(status_code=400, detail="User session missing")
 
-    # Save email
     waitlist_col.update_one(
         {"email": email_request.email},
         {
@@ -210,7 +215,6 @@ async def unlock_access(request: Request, email_request: EmailRequest):
         upsert=True
     )
 
-    # Unlock user
     usage_col.update_one(
         {"user_id": active_user_id},
         {"$set": {"is_unlocked": True}}
@@ -222,8 +226,5 @@ async def unlock_access(request: Request, email_request: EmailRequest):
     }
 
 
-# =====================================================
-# RUN SERVER
-# =====================================================
 if __name__ == "__main__":
     uvicorn.run(server, host="0.0.0.0", port=8001)
