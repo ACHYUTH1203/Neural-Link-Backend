@@ -40,6 +40,12 @@ frameworks_col = mongo_db["frameworks"]
 podcasts_col = mongo_db["podcasts"]
 user_interactions_col = mongo_db["user_interaction"]
 
+
+books_chunks_col = mongo_db["books_chunks"]
+frameworks_chunks_col = mongo_db["frameworks_chunks"]
+podcasts_chunks_col = mongo_db["podcasts_chunks"]
+
+
 continuation_signals = [
     "yes", "yeah", "yep", "ok", "okay", 
     "sure", "continue", "go ahead", 
@@ -352,47 +358,67 @@ def rag_generator_node(state: GraphState):
 
     query_embedding = embedding_model.embed_query(query)
 
-    logger.info("Performing vector similarity search...")
+    logger.info("Performing vector search on chunk collections...")
 
-    def fetch_all(col):
-        return list(col.find({}, {
-            "embedding": 1,
-            "content": 1,
-            "title": 1,
-            "book_name": 1,
-        }))
+    def vector_search(collection, limit=5):
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "vector_index",
+                    "path": "embedding",
+                    "queryVector": query_embedding,
+                    "numCandidates": 100,
+                    "limit": limit
+                }
+            },
+            {
+                "$project": {
+                    "text": 1,
+                    "parent_id": 1,
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            }
+        ]
+        return list(collection.aggregate(pipeline))
 
-    books = fetch_all(books_col)
-    frameworks = fetch_all(frameworks_col)
-  
-    podcasts = fetch_all(podcasts_col)
+    all_results = []
 
-    all_docs = books + frameworks  + podcasts
+    for collection in [
+        books_chunks_col,
+        frameworks_chunks_col,
+        podcasts_chunks_col
+    ]:
+        try:
+            results = vector_search(collection, limit=5)
+            all_results.extend(results)
+        except Exception as e:
+            logger.warning(f"Vector search failed: {e}")
 
-    scored_docs = []
+    if not all_results:
+        logger.warning("No relevant chunks found.")
+        context_text = "NO CONTEXT AVAILABLE"
+    else:
 
-    for doc in all_docs:
-        if "embedding" not in doc:
-            continue
-        score = cosine_similarity(query_embedding, doc["embedding"])
-        scored_docs.append((score, doc))
+        all_results = sorted(
+            all_results,
+            key=lambda x: x["score"],
+            reverse=True
+        )
 
-    scored_docs.sort(key=lambda x: x[0], reverse=True)
-    top_docs = [doc for score, doc in scored_docs[:5]]
+        top_chunks = all_results[:8]
 
-    logger.info(f"Top {len(top_docs)} relevant documents retrieved")
+        context_chunks = [
+            normalize_text(chunk["text"])
+            for chunk in top_chunks
+            if chunk.get("text")
+        ]
 
-    context_chunks = []
-    for d in top_docs:
-        if "content" in d and d["content"]:
-            context_chunks.append(normalize_text(d["content"]))
-        elif "title" in d and d["title"]:
-            context_chunks.append(normalize_text(d["title"]))
+        context_text = "\n\n".join(context_chunks)
 
-    context_text = "\n\n".join(context_chunks) if context_chunks else "NO CONTEXT AVAILABLE"
     if len(context_text) > MAX_CONTEXT_CHARS:
         logger.warning("Context too large. Truncating.")
         context_text = context_text[:MAX_CONTEXT_CHARS]
+
 
     system_prompt = """
     You are Elon Musk.
