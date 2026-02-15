@@ -72,168 +72,256 @@ class TavilyKeyPool:
         logger.info(f"Using Tavily API key: {key[:8]}****")
         return key
 
+# def conversation_strategy_node(state: GraphState):
+#     """
+#     Determines whether we should:
+#     - Expand previous answer
+#     - Interpret clarification semantically
+#     - Ask for clarification (max once)
+#     - Proceed to answer
+#     """
+#     logger.info("--- ENTERING CONVERSATION STRATEGY NODE ---")
+#     llm = ElonLLM()
+
+#     user_query = state["query"].strip()
+#     user_query_clean = user_query.lower()
+
+
+#     continuation_signals = [
+#         "yes", "yeah", "yep", "ok", "okay",
+#         "sure", "continue", "go ahead",
+#         "tell me more", "more", "expand"
+#     ]
+
+#     if user_query_clean in continuation_signals:
+#         logger.info("Detected continuation signal. Forcing expansion.")
+#         return {
+#             "conversation_mode": "answer",
+#             "force_expand": True,
+#             "awaiting_clarification": False,
+#             "clarification_count": 999
+#         }
+
+#     if state.get("awaiting_clarification"):
+
+#         interpretation_prompt = f"""
+#         Original Question:
+#         {state.get("original_query")}
+
+#         User Clarification:
+#         {user_query}
+
+#         Determine the user's intent.
+
+#         If clarification implies broad or overall explanation → BROAD
+#         If it specifies a focused sub-topic → SPECIFIC
+#         If still unclear or ambiguous → UNCLEAR
+
+#         Return ONLY one word: BROAD, SPECIFIC, or UNCLEAR.
+#         """
+
+#         interpretation = llm.get_response(
+#             system_instruction="You are a conversational intent interpreter.",
+#             user_query=interpretation_prompt,
+#             temperature=0
+#         ).strip().upper()
+
+#         logger.info(f"Clarification interpretation: {interpretation}")
+
+#         if interpretation == "BROAD":
+#             merged_query = f"{state.get('original_query')} (provide a broad overview)"
+#             return {
+#                 "query": merged_query,
+#                 "original_query": merged_query,
+#                 "awaiting_clarification": False,
+#                 "conversation_mode": "answer",
+#                 "clarification_count": 999
+#             }
+
+#         if interpretation == "SPECIFIC":
+#             merged_query = f"{state.get('original_query')} regarding {user_query}"
+#             return {
+#                 "query": merged_query,
+#                 "original_query": merged_query,
+#                 "awaiting_clarification": False,
+#                 "conversation_mode": "answer",
+#                 "clarification_count": 999
+#             }
+
+#         if state.get("clarification_count", 0) >= 1:
+#             logger.info("Clarification already used. Forcing answer.")
+#             return {
+#                 "conversation_mode": "answer",
+#                 "awaiting_clarification": False,
+#                 "clarification_count": 999
+#             }
+
+#         clarification_prompt = f"""
+#         The user clarification is still unclear:
+#         {user_query}
+
+#         Ask ONE concise clarification question.
+#         Do not interrogate.
+#         """
+
+#         clarification_question = llm.get_response(
+#             system_instruction="You are Elon Musk. Ask one sharp clarification.",
+#             user_query=clarification_prompt,
+#             temperature=0.3
+#         )
+
+#         return {
+#             "final_response": clarification_question,
+#             "conversation_mode": "clarify",
+#             "awaiting_clarification": True,
+#             "clarification_count": state.get("clarification_count", 0) + 1
+#         }
+
+#     intent_prompt = f"""
+#     Decide whether this query requires clarification.
+
+#     If vague AND cannot reasonably assume a broad overview → CLARIFY
+#     If clear OR broad in nature → ANSWER
+
+#     Query:
+#     {user_query}
+
+#     Return ONLY one word: CLARIFY or ANSWER
+#     """
+
+#     decision = llm.get_response(
+#         system_instruction="You are a conversational intent classifier.",
+#         user_query=intent_prompt,
+#         temperature=0
+#     ).strip().upper()
+
+#     logger.info(f"Intent decision: {decision}")
+
+#     if decision == "CLARIFY":
+
+#         if state.get("clarification_count", 0) >= 1:
+#             logger.info("Clarification limit reached. Forcing answer.")
+#             return {
+#                 "conversation_mode": "answer",
+#                 "awaiting_clarification": False,
+#                 "clarification_count": 999
+#             }
+
+#         clarification_prompt = f"""
+#         The user asked:
+#         {user_query}
+
+#         Ask ONE short clarification question.
+#         Be concise.
+#         No interrogation.
+#         """
+
+#         clarification_question = llm.get_response(
+#             system_instruction="You are Elon Musk. Ask high-signal clarification.",
+#             user_query=clarification_prompt,
+#             temperature=0.3
+#         )
+
+#         return {
+#             "final_response": clarification_question,
+#             "conversation_mode": "clarify",
+#             "awaiting_clarification": True,
+#             "clarification_count": state.get("clarification_count", 0) + 1
+#         }
+
+
+#     return {
+#         "conversation_mode": "answer",
+#         "awaiting_clarification": False
+#     }
+
+
+
 def conversation_strategy_node(state: GraphState):
-    """
-    Determines whether we should:
-    - Expand previous answer
-    - Interpret clarification semantically
-    - Ask for clarification (max once)
-    - Proceed to answer
-    """
+
     logger.info("--- ENTERING CONVERSATION STRATEGY NODE ---")
     llm = ElonLLM()
 
     user_query = state["query"].strip()
-    user_query_clean = user_query.lower()
+    original_query = state.get("original_query", user_query)
 
+    chat_history = state.get("chat_history", [])
+    formatted_history = ""
 
-    continuation_signals = [
-        "yes", "yeah", "yep", "ok", "okay",
-        "sure", "continue", "go ahead",
-        "tell me more", "more", "expand"
-    ]
+    for turn in chat_history[-3:]:
+        formatted_history += f"User: {turn['user_query']}\n"
+        formatted_history += f"Assistant: {turn['response']}\n\n"
 
-    if user_query_clean in continuation_signals:
-        logger.info("Detected continuation signal. Forcing expansion.")
-        return {
-            "conversation_mode": "answer",
-            "force_expand": True,
-            "awaiting_clarification": False,
-            "clarification_count": 999
-        }
+    strategy_prompt = f"""
+    You are a conversational routing engine.
 
-    if state.get("awaiting_clarification"):
+    Recent conversation:
+    {formatted_history}
 
-        interpretation_prompt = f"""
-        Original Question:
-        {state.get("original_query")}
+    Current user message:
+    "{user_query}"
 
-        User Clarification:
-        {user_query}
+    Decide the intent:
 
-        Determine the user's intent.
+    CONTINUE → User wants to expand previous answer.
+    ANSWER → Query is clear and answerable.
+    ASSUME → Query is ambiguous but can be resolved with reasonable assumptions.
 
-        If clarification implies broad or overall explanation → BROAD
-        If it specifies a focused sub-topic → SPECIFIC
-        If still unclear or ambiguous → UNCLEAR
+    Never choose CLARIFY.
+    Always prefer ANSWER over ASSUME when possible.
 
-        Return ONLY one word: BROAD, SPECIFIC, or UNCLEAR.
-        """
-
-        interpretation = llm.get_response(
-            system_instruction="You are a conversational intent interpreter.",
-            user_query=interpretation_prompt,
-            temperature=0
-        ).strip().upper()
-
-        logger.info(f"Clarification interpretation: {interpretation}")
-
-        if interpretation == "BROAD":
-            merged_query = f"{state.get('original_query')} (provide a broad overview)"
-            return {
-                "query": merged_query,
-                "original_query": merged_query,
-                "awaiting_clarification": False,
-                "conversation_mode": "answer",
-                "clarification_count": 999
-            }
-
-        if interpretation == "SPECIFIC":
-            merged_query = f"{state.get('original_query')} regarding {user_query}"
-            return {
-                "query": merged_query,
-                "original_query": merged_query,
-                "awaiting_clarification": False,
-                "conversation_mode": "answer",
-                "clarification_count": 999
-            }
-
-        if state.get("clarification_count", 0) >= 1:
-            logger.info("Clarification already used. Forcing answer.")
-            return {
-                "conversation_mode": "answer",
-                "awaiting_clarification": False,
-                "clarification_count": 999
-            }
-
-        clarification_prompt = f"""
-        The user clarification is still unclear:
-        {user_query}
-
-        Ask ONE concise clarification question.
-        Do not interrogate.
-        """
-
-        clarification_question = llm.get_response(
-            system_instruction="You are Elon Musk. Ask one sharp clarification.",
-            user_query=clarification_prompt,
-            temperature=0.3
-        )
-
-        return {
-            "final_response": clarification_question,
-            "conversation_mode": "clarify",
-            "awaiting_clarification": True,
-            "clarification_count": state.get("clarification_count", 0) + 1
-        }
-
-    intent_prompt = f"""
-    Decide whether this query requires clarification.
-
-    If vague AND cannot reasonably assume a broad overview → CLARIFY
-    If clear OR broad in nature → ANSWER
-
-    Query:
-    {user_query}
-
-    Return ONLY one word: CLARIFY or ANSWER
+    Return ONLY one word:
+    CONTINUE
+    ANSWER
+    ASSUME
     """
 
     decision = llm.get_response(
-        system_instruction="You are a conversational intent classifier.",
-        user_query=intent_prompt,
+        system_instruction="You are a precise conversational intent classifier.",
+        user_query=strategy_prompt,
         temperature=0
     ).strip().upper()
 
-    logger.info(f"Intent decision: {decision}")
-
-    if decision == "CLARIFY":
-
-        if state.get("clarification_count", 0) >= 1:
-            logger.info("Clarification limit reached. Forcing answer.")
-            return {
-                "conversation_mode": "answer",
-                "awaiting_clarification": False,
-                "clarification_count": 999
-            }
-
-        clarification_prompt = f"""
-        The user asked:
-        {user_query}
-
-        Ask ONE short clarification question.
-        Be concise.
-        No interrogation.
-        """
-
-        clarification_question = llm.get_response(
-            system_instruction="You are Elon Musk. Ask high-signal clarification.",
-            user_query=clarification_prompt,
-            temperature=0.3
-        )
-
+    if decision == "CONTINUE":
         return {
-            "final_response": clarification_question,
-            "conversation_mode": "clarify",
-            "awaiting_clarification": True,
-            "clarification_count": state.get("clarification_count", 0) + 1
+            "conversation_mode": "answer",
+            "force_expand": True,
+            "awaiting_clarification": False
         }
 
+    if decision == "ASSUME":
+
+        rewrite_prompt = f"""
+        Recent conversation:
+        {formatted_history}
+
+        User message:
+        "{user_query}"
+
+        Rewrite this into a clear standalone question
+        using the most reasonable assumption.
+
+        Return ONLY the rewritten question.
+        """
+
+        rewritten_query = llm.get_response(
+            system_instruction="You resolve ambiguity internally and confidently.",
+            user_query=rewrite_prompt,
+            temperature=0
+        ).strip()
+
+        return {
+            "query": rewritten_query,
+            "original_query": rewritten_query,
+            "conversation_mode": "answer",
+            "awaiting_clarification": False
+        }
 
     return {
         "conversation_mode": "answer",
         "awaiting_clarification": False
     }
+
 
 
 def query_refiner_node(state: GraphState):
@@ -468,41 +556,102 @@ def rag_generator_node(state: GraphState):
         "response_type": "rag"
     }
 
+# def validator_node(state: GraphState):
+#     """Simplified validator: Returns only a score to decide on web search fallback."""
+#     logger.info("--- ENTERING VALIDATOR NODE ---")
+#     llm = ElonLLM()
+    
+#     validation_prompt = f"""
+#     Evaluate this response for the Elon Musk Digital Twin.
+    
+#     QUERY: {state['query']}
+#     CONTEXT: {state.get('rag_docs', 'NO CONTEXT AVAILABLE')}
+#     ANSWER: {state['final_response']}
+
+#     CRITERIA:
+#     1. Accuracy: Is it supported by context?
+#     2. Persona: Does it sound like Elon (blunt, first-principles, no fluff)?
+
+#     Output ONLY a single number between 0.0 and 1.0. 
+#     A score < 0.7 means we must discard this and use Web Search.
+#     """
+
+#     raw_score = llm.get_response(
+#         system_instruction="Output numbers only.", 
+#         user_query=validation_prompt,
+#         temperature=0
+#     )
+    
+#     try:
+#         score = float(raw_score.strip())
+#     except:
+#         score = 0.0 
+#     low_score = score < 0.70
+    
+#     return {
+#         "validation_score": score,
+#         "needs_assistance": low_score
+#     }
 def validator_node(state: GraphState):
-    """Simplified validator: Returns only a score to decide on web search fallback."""
+
     logger.info("--- ENTERING VALIDATOR NODE ---")
     llm = ElonLLM()
-    
+
+    context_available = state.get("rag_docs", "NO CONTEXT AVAILABLE")
+
+    # Skip validation if no RAG context exists
+    if not context_available or context_available == "NO CONTEXT AVAILABLE":
+        return {
+            "validation_score": 1.0,
+            "needs_assistance": False
+        }
+
     validation_prompt = f"""
-    Evaluate this response for the Elon Musk Digital Twin.
-    
-    QUERY: {state['query']}
-    CONTEXT: {state.get('rag_docs', 'NO CONTEXT AVAILABLE')}
-    ANSWER: {state['final_response']}
+    You are validating a response from an Elon Musk digital twin system.
 
-    CRITERIA:
-    1. Accuracy: Is it supported by context?
-    2. Persona: Does it sound like Elon (blunt, first-principles, no fluff)?
+    USER QUERY:
+    {state['query']}
 
-    Output ONLY a single number between 0.0 and 1.0. 
-    A score < 0.7 means we must discard this and use Web Search.
+    RETRIEVED CONTEXT:
+    {context_available}
+
+    GENERATED ANSWER:
+    {state['final_response']}
+
+    Evaluate strictly on:
+
+    1. Is every major factual claim supported by the retrieved context?
+    2. Does the answer avoid introducing unsupported information?
+    3. Does it maintain a strong first-person persona?
+    4. Is the tone direct, high-signal, and physics-first?
+
+    Scoring rules:
+    - 1.0 = Fully grounded, persona correct, no hallucination.
+    - 0.8 = Minor stylistic issue but factually grounded.
+    - 0.6 = Some unsupported claims.
+    - 0.4 = Major hallucination or persona break.
+    - 0.0 = Completely unsupported or incorrect.
+
+    Output ONLY a number between 0.0 and 1.0.
     """
 
     raw_score = llm.get_response(
-        system_instruction="Output numbers only.", 
+        system_instruction="Return only a numeric score.",
         user_query=validation_prompt,
         temperature=0
     )
-    
+
     try:
         score = float(raw_score.strip())
     except:
-        score = 0.0 
-    low_score = score < 0.70
-    
+        score = 0.0
+
+    # Web fallback threshold tuned slightly lower to avoid over-triggering
+    needs_assistance = score < 0.65
+
     return {
         "validation_score": score,
-        "needs_assistance": low_score
+        "needs_assistance": needs_assistance
     }
 
 def web_search_node(state: GraphState):
