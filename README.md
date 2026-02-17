@@ -24,17 +24,34 @@ It is a structured AI system built with:
 
 ⚡ Production deployment
 
-🏗 Architecture
 flowchart TD
-    A[User Query] --> B[Query Refiner]
-    B --> C[Conversation Strategy (LLM Routing)]
-    C -->|Continue| D[Expand Previous Answer]
-    C -->|Answer / Assume| E[RAG Generator]
-    E --> F[Validator]
-    F -->|Low Score| G[Web Search Fallback]
-    G --> H[Save Interaction]
-    F -->|High Score| H
-    H --> I[Response]
+
+    subgraph User Layer
+        A[User Query]
+    end
+
+    subgraph Orchestration Layer (LangGraph)
+        B[Query Refiner]
+        C[Conversation Strategy<br/>(LLM Routing)]
+        D[Expand Previous Answer]
+        E[RAG Generator]
+        F[Validator]
+        H[Save Interaction]
+    end
+
+    subgraph Knowledge Layer
+        G[Web Search Fallback]
+    end
+
+    A --> B
+    B --> C
+    C -->|Continue| D
+    C -->|Answer / Assume| E
+    E --> F
+    F -->|Low Confidence| G
+    G --> H
+    F -->|High Confidence| H
+    H --> I[Final Response]
 
 Execution Flow
 Refine → Route → Retrieve → Generate → Validate → (Optional Web) → Save
