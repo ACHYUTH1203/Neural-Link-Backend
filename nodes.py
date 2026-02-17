@@ -556,42 +556,6 @@ def rag_generator_node(state: GraphState):
         "response_type": "rag"
     }
 
-# def validator_node(state: GraphState):
-#     """Simplified validator: Returns only a score to decide on web search fallback."""
-#     logger.info("--- ENTERING VALIDATOR NODE ---")
-#     llm = ElonLLM()
-    
-#     validation_prompt = f"""
-#     Evaluate this response for the Elon Musk Digital Twin.
-    
-#     QUERY: {state['query']}
-#     CONTEXT: {state.get('rag_docs', 'NO CONTEXT AVAILABLE')}
-#     ANSWER: {state['final_response']}
-
-#     CRITERIA:
-#     1. Accuracy: Is it supported by context?
-#     2. Persona: Does it sound like Elon (blunt, first-principles, no fluff)?
-
-#     Output ONLY a single number between 0.0 and 1.0. 
-#     A score < 0.7 means we must discard this and use Web Search.
-#     """
-
-#     raw_score = llm.get_response(
-#         system_instruction="Output numbers only.", 
-#         user_query=validation_prompt,
-#         temperature=0
-#     )
-    
-#     try:
-#         score = float(raw_score.strip())
-#     except:
-#         score = 0.0 
-#     low_score = score < 0.70
-    
-#     return {
-#         "validation_score": score,
-#         "needs_assistance": low_score
-#     }
 def validator_node(state: GraphState):
 
     logger.info("--- ENTERING VALIDATOR NODE ---")
